@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     result::Result as StdResult,
     sync::Arc,
     task::{Context, Poll},
@@ -58,6 +59,8 @@ impl Service<AzureBlobRequest> for AzureBlobService {
                         request.blob_data,
                         request.content_type,
                         request.content_encoding,
+                        request.tags,
+                        request.blob_metadata,
                     )
                     .await
                 }
@@ -67,6 +70,8 @@ impl Service<AzureBlobRequest> for AzureBlobService {
                         request.blob_data,
                         request.content_type,
                         request.content_encoding,
+                        request.tags,
+                        request.blob_metadata,
                     )
                     .await
                 }
@@ -87,10 +92,14 @@ async fn upload_block_blob(
     data: Bytes,
     content_type: &str,
     content_encoding: Option<&str>,
+    tags: Option<String>,
+    metadata: Option<HashMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let upload_options = BlockBlobClientUploadOptions {
         blob_content_type: Some(content_type.to_string()),
         blob_content_encoding: content_encoding.map(str::to_string),
+        blob_tags_string: tags,
+        metadata,
         ..Default::default()
     }
     .if_not_exists();
@@ -114,11 +123,16 @@ fn storage_error_code(e: &azure_core::Error) -> Option<String> {
 // Appends `data` to an existing append blob, creating the blob first if it doesn't exist.
 // Uses the EAFP pattern: attempt append, create on 404, retry once.
 // A 409 Conflict on create is swallowed — it means a concurrent writer created the blob first.
+//
+// Tags and metadata are blob-level properties applied only at creation time. Batches that
+// append to an already-existing blob (the steady-state hot path) do not re-apply them.
 async fn append_blob(
     append_client: &azure_storage_blob::AppendBlobClient,
     data: Bytes,
     content_type: &str,
     content_encoding: Option<&str>,
+    tags: Option<String>,
+    metadata: Option<HashMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let data_len = data.len() as u64;
 
@@ -160,6 +174,8 @@ async fn append_blob(
     let create_opts = AppendBlobClientCreateOptions {
         blob_content_type: Some(content_type.to_string()),
         blob_content_encoding: content_encoding.map(str::to_string),
+        blob_tags_string: tags,
+        metadata,
         ..Default::default()
     }
     .if_not_exists();

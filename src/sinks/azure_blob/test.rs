@@ -35,6 +35,8 @@ fn default_config(encoding: EncodingConfigWithFraming) -> AzureBlobSinkConfig {
         blob_type: Default::default(),
         encoding,
         compression: Compression::gzip_default(),
+        tags: Default::default(),
+        metadata: Default::default(),
         batch: Default::default(),
         request: Default::default(),
         acknowledgements: Default::default(),
@@ -79,6 +81,8 @@ fn azure_blob_build_request_without_compression() {
             ),
         ),
         compression,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -128,6 +132,8 @@ fn azure_blob_build_request_with_compression() {
             ),
         ),
         compression,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -177,6 +183,8 @@ fn azure_blob_build_request_with_time_format() {
             ),
         ),
         compression,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -229,6 +237,8 @@ fn azure_blob_build_request_with_uuid() {
             ),
         ),
         compression,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -589,6 +599,8 @@ fn azure_blob_build_request_append_blob_defaults() {
             ),
         ),
         compression: Compression::None,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -638,6 +650,8 @@ fn azure_blob_build_request_append_blob_with_compression() {
             ),
         ),
         compression: Compression::gzip_default(),
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -720,6 +734,8 @@ fn azure_blob_block_blob_request_carries_block_type() {
             ),
         ),
         compression: Compression::None,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -766,6 +782,8 @@ fn azure_blob_append_blob_with_uuid_override_generates_unique_keys() {
                 ),
             ),
             compression: Compression::None,
+            tags: None,
+            metadata: None,
         };
 
         let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -821,6 +839,8 @@ fn azure_blob_append_blob_stable_name_without_uuid_and_time() {
                 ),
             ),
             compression: Compression::None,
+            tags: None,
+            metadata: None,
         };
 
         let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -874,6 +894,8 @@ fn azure_blob_append_blob_custom_time_format_hourly_rotation() {
             ),
         ),
         compression: Compression::None,
+        tags: None,
+        metadata: None,
     };
 
     let mut byte_size = GroupedCountByteSize::new_untagged();
@@ -980,4 +1002,166 @@ async fn azure_blob_append_blob_explicit_oversized_batch_fails_at_startup() {
         msg.contains("max_bytes") && msg.contains("exceeds"),
         "expected a max_bytes batch limit error, got: {msg}"
     );
+}
+
+#[test]
+fn azure_blob_build_request_with_blob_tags() {
+    use std::collections::BTreeMap;
+
+    let log = Event::Log(LogEvent::from("test message"));
+    let compression = Compression::None;
+    let container_name = String::from("logs");
+    let sink_config = AzureBlobSinkConfig {
+        blob_prefix: "blob".try_into().unwrap(),
+        container_name: container_name.clone(),
+        ..default_config((None::<FramingConfig>, TextSerializerConfig::default()).into())
+    };
+
+    let mut tags = BTreeMap::new();
+    tags.insert("Project".to_string(), "Blue".to_string());
+    tags.insert("Owner".to_string(), "ops team".to_string());
+
+    let key = sink_config
+        .key_partitioner()
+        .unwrap()
+        .partition(&log)
+        .expect("key wasn't provided");
+
+    let request_options = AzureBlobRequestOptions {
+        container_name,
+        blob_time_format: String::from(""),
+        blob_append_uuid: false,
+        blob_type: Default::default(),
+        encoder: (
+            Default::default(),
+            Encoder::<Framer>::new(
+                NewlineDelimitedEncoder::default().into(),
+                TextSerializerConfig::default().build().into(),
+            ),
+        ),
+        compression,
+        tags: Some(tags),
+        metadata: None,
+    };
+
+    let mut byte_size = GroupedCountByteSize::new_untagged();
+    byte_size.add_event(&log, log.estimated_json_encoded_size_of());
+
+    let (metadata, request_metadata_builder, _events) =
+        request_options.split_input((key, vec![log]));
+
+    let payload = EncodeResult::uncompressed(Bytes::new(), byte_size);
+    let request_metadata = request_metadata_builder.build(&payload);
+    let request = request_options.build_request(metadata, request_metadata, payload);
+
+    // BTreeMap ordering: "Owner" < "Project"; space is percent-encoded as %20.
+    assert_eq!(
+        request.tags,
+        Some("Owner=ops%20team&Project=Blue".to_string())
+    );
+    assert_eq!(request.blob_metadata, None);
+}
+
+#[test]
+fn azure_blob_build_request_with_blob_metadata() {
+    use std::collections::HashMap;
+
+    let log = Event::Log(LogEvent::from("test message"));
+    let compression = Compression::None;
+    let container_name = String::from("logs");
+    let sink_config = AzureBlobSinkConfig {
+        blob_prefix: "blob".try_into().unwrap(),
+        container_name: container_name.clone(),
+        ..default_config((None::<FramingConfig>, TextSerializerConfig::default()).into())
+    };
+
+    let mut metadata = HashMap::new();
+    metadata.insert("source".to_string(), "vector".to_string());
+
+    let key = sink_config
+        .key_partitioner()
+        .unwrap()
+        .partition(&log)
+        .expect("key wasn't provided");
+
+    let request_options = AzureBlobRequestOptions {
+        container_name,
+        blob_time_format: String::from(""),
+        blob_append_uuid: false,
+        blob_type: Default::default(),
+        encoder: (
+            Default::default(),
+            Encoder::<Framer>::new(
+                NewlineDelimitedEncoder::default().into(),
+                TextSerializerConfig::default().build().into(),
+            ),
+        ),
+        compression,
+        tags: None,
+        metadata: Some(metadata.clone()),
+    };
+
+    let mut byte_size = GroupedCountByteSize::new_untagged();
+    byte_size.add_event(&log, log.estimated_json_encoded_size_of());
+
+    let (azure_metadata, request_metadata_builder, _events) =
+        request_options.split_input((key, vec![log]));
+
+    let payload = EncodeResult::uncompressed(Bytes::new(), byte_size);
+    let request_metadata = request_metadata_builder.build(&payload);
+    let request = request_options.build_request(azure_metadata, request_metadata, payload);
+
+    assert_eq!(request.tags, None);
+    assert_eq!(request.blob_metadata, Some(metadata));
+}
+
+#[test]
+fn azure_blob_build_request_with_empty_blob_tags_and_metadata() {
+    use std::collections::{BTreeMap, HashMap};
+
+    let log = Event::Log(LogEvent::from("test message"));
+    let compression = Compression::None;
+    let container_name = String::from("logs");
+    let sink_config = AzureBlobSinkConfig {
+        blob_prefix: "blob".try_into().unwrap(),
+        container_name: container_name.clone(),
+        ..default_config((None::<FramingConfig>, TextSerializerConfig::default()).into())
+    };
+
+    let key = sink_config
+        .key_partitioner()
+        .unwrap()
+        .partition(&log)
+        .expect("key wasn't provided");
+
+    // Empty maps must collapse to `None` so we do not emit empty headers.
+    let request_options = AzureBlobRequestOptions {
+        container_name,
+        blob_time_format: String::from(""),
+        blob_append_uuid: false,
+        blob_type: Default::default(),
+        encoder: (
+            Default::default(),
+            Encoder::<Framer>::new(
+                NewlineDelimitedEncoder::default().into(),
+                TextSerializerConfig::default().build().into(),
+            ),
+        ),
+        compression,
+        tags: Some(BTreeMap::new()),
+        metadata: Some(HashMap::new()),
+    };
+
+    let mut byte_size = GroupedCountByteSize::new_untagged();
+    byte_size.add_event(&log, log.estimated_json_encoded_size_of());
+
+    let (metadata, request_metadata_builder, _events) =
+        request_options.split_input((key, vec![log]));
+
+    let payload = EncodeResult::uncompressed(Bytes::new(), byte_size);
+    let request_metadata = request_metadata_builder.build(&payload);
+    let request = request_options.build_request(metadata, request_metadata, payload);
+
+    assert_eq!(request.tags, None);
+    assert_eq!(request.blob_metadata, None);
 }

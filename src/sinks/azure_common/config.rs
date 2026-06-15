@@ -436,6 +436,10 @@ pub struct AzureBlobRequest {
     pub metadata: AzureBlobMetadata,
     pub request_metadata: RequestMetadata,
     pub blob_type: AzureBlobType,
+    /// Pre-encoded `x-ms-tags` header value (`k=v&k=v`), or `None` to omit the header.
+    pub tags: Option<String>,
+    /// Custom blob metadata. Each entry becomes an `x-ms-meta-{key}` header.
+    pub blob_metadata: Option<std::collections::HashMap<String, String>>,
 }
 
 impl Finalizable for AzureBlobRequest {

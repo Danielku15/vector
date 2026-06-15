@@ -865,6 +865,27 @@ generated: components: sinks: azure_blob: configuration: {
 			}
 		}
 	}
+	metadata: {
+		description: """
+			The set of [custom metadata][blob_metadata] `key:value` pairs to apply to created blobs.
+
+			Each entry becomes an `x-ms-meta-{key}` header. Azure enforces its own limits on names
+			and combined size (currently 8 KiB total); invalid configurations are rejected by the
+			service. Names must be valid C# identifiers, and non-ASCII values must be
+			Base64-encoded by the user.
+
+			For `blob_type: append`, metadata is applied when the blob is first created. Subsequent
+			batches that append to an existing blob do not modify its metadata.
+
+			[blob_metadata]: https://learn.microsoft.com/rest/api/storageservices/set-blob-metadata
+			"""
+		required: false
+		type: object: options: "*": {
+			description: "A key/value pair."
+			required:    true
+			type: string: {}
+		}
+	}
 	request: {
 		description: """
 			Middleware settings for outbound requests.
@@ -1048,6 +1069,33 @@ generated: components: sinks: azure_blob: configuration: {
 					default: 60
 					unit:    "seconds"
 				}
+			}
+		}
+	}
+	tags: {
+		description: """
+			The set of [blob index tags][blob_index_tags] to apply to created blobs.
+
+			Each entry becomes a tag in the `x-ms-tags` header. Azure enforces its own limits
+			(currently up to 10 tags per blob, with restricted character sets for keys and values);
+			invalid configurations are rejected by the service.
+
+			For `blob_type: append`, tags are applied when the blob is first created. Subsequent
+			batches that append to an existing blob do not modify its tags.
+
+			[blob_index_tags]: https://learn.microsoft.com/azure/storage/blobs/storage-blob-index-how-to
+			"""
+		required: false
+		type: object: {
+			examples: [{
+				Classification: "confidential"
+				PHI:            "True"
+				Project:        "Blue"
+			}]
+			options: "*": {
+				description: "A single tag."
+				required:    true
+				type: string: {}
 			}
 		}
 	}
